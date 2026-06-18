@@ -185,11 +185,10 @@ int main(int argc, char **argv) {
     while (running) {
         if (stat(FRAME_PATH, &st) == 0) {
             if (st.st_mtime != last_mtime) {
-                last_mtime = st.st_mtime;
-
                 int width, height, channels;
                 unsigned char *img = stbi_load(FRAME_PATH, &width, &height, &channels, 3);
                 if (img) {
+                    last_mtime = st.st_mtime;
                     Color top_colors[8];
                     Color right_colors[4];
                     Color bottom_colors[8];

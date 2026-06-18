@@ -98,6 +98,7 @@ class StreamManager:
             
             ffmpeg_cmd = [
                 "ffmpeg", "-y",
+                "-f", "h264",
                 "-i", "pipe:0",
                 "-vf", "scale=128:72",
                 "-update", "1",
@@ -147,6 +148,16 @@ def start_payload():
             print("No ADB device found, cannot start payload", file=sys.stderr)
             return False
         
+        # Override proximity sensor so display stays on, and keep display awake
+        try:
+            subprocess.run([ADB_BIN, "-s", device, "shell", "am", "broadcast", "-a", "com.oculus.vrpowermanager.prox_close"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run([ADB_BIN, "-s", device, "shell", "svc", "power", "stayon", "usb"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f"Disabled proximity sensor and set stayon=usb for device {device}")
+        except Exception as e:
+            print(f"Failed to override sensor/stayon settings: {e}", file=sys.stderr)
+        
         # Ensure target folder exists and is clean
         os.makedirs(FRAME_DIR, exist_ok=True)
         for p in [LATEST_FRAME_PATH, LATEST_COLORS_PATH]:
@@ -180,6 +191,18 @@ def start_payload():
 def stop_payload():
     global stream_manager, daemon_process
     with payload_lock:
+        # Restore proximity sensor behavior and stayon settings
+        device = get_adb_device()
+        if device:
+            try:
+                subprocess.run([ADB_BIN, "-s", device, "shell", "am", "broadcast", "-a", "com.oculus.vrpowermanager.automation_disable"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run([ADB_BIN, "-s", device, "shell", "svc", "power", "stayon", "false"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print(f"Restored normal proximity sensor and stayon settings for device {device}")
+            except Exception as e:
+                print(f"Failed to restore sensor/stayon settings: {e}", file=sys.stderr)
+
         # 1. Stop H.264 stream decoding pipeline
         if stream_manager:
             stream_manager.stop()
