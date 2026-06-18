@@ -1,0 +1,15 @@
+# Large binaries and assets
+images/
+platform-tools/
+adb-build/
+android-tools-src/
+rootfs-inspect/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+
+# System and logs
+*.log
+.DS_Store

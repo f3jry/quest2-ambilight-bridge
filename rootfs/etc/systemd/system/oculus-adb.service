@@ -1,0 +1,16 @@
+[Unit]
+Description=Connect to Oculus via RNDIS ADB
+After=rndis.service network-online.target
+Wants=rndis.service
+Requires=network.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/oculus-adb.env
+ExecStart=/usr/local/bin/oculus-adb-connect.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
