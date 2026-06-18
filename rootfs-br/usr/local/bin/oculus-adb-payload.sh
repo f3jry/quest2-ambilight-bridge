@@ -69,6 +69,22 @@ frame_ok() {
 log "payload target=$TARGET scale=$FRAME_SCALE ffmpeg=$USE_FFMPEG"
 "$LED" off 2>/dev/null || true
 
+DAEMON_PID=""
+cleanup() {
+  if [ -n "$DAEMON_PID" ]; then
+    log "Stopping C ambilightd daemon (PID $DAEMON_PID)..."
+    kill "$DAEMON_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
+# Start C ambilightd daemon in SPI mode if installed
+if [ -x /usr/local/bin/ambilightd ]; then
+  log "Starting C ambilightd daemon..."
+  /usr/local/bin/ambilightd -m spi -o /dev/spidev0.0 >/dev/null 2>&1 &
+  DAEMON_PID=$!
+fi
+
 fail=0
 while true; do
   if frame_ok; then
@@ -86,3 +102,4 @@ while true; do
   fi
   sleep "$FRAME_INTERVAL"
 done
+

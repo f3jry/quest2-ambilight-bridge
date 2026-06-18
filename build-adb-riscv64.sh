@@ -46,9 +46,15 @@ cmake -S "$SRC" -B "$SRC/build-riscv64" \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build "$SRC/build-riscv64" -j"$(nproc)"
 
+echo "[2b/3] ambilight C daemon (riscv64)"
+make -C "$(dirname "$0")/ambilight-daemon" clean
+make -C "$(dirname "$0")/ambilight-daemon" riscv64
+
 echo "[3/3] install to rootfs"
 inst() { if [[ "$(id -u)" -eq 0 ]]; then install "$@"; else sudo install "$@"; fi; }
 inst -Dm755 "$SRC/build-riscv64/src/adb" "$ROOT/usr/local/bin/adb"
+inst -Dm755 "$(dirname "$0")/ambilight-daemon/ambilightd-riscv64" "$ROOT/usr/local/bin/ambilightd"
+
 if [[ "${MILKV_STATIC:-0}" == "1" ]]; then
   echo "static adb — no runtime libs required"
 else
@@ -60,4 +66,6 @@ else
 fi
 
 file "$ROOT/usr/local/bin/adb"
-echo "adb installed: $ROOT/usr/local/bin/adb"
+file "$ROOT/usr/local/bin/ambilightd"
+echo "adb and ambilightd installed: $ROOT/usr/local/bin/"
+

@@ -565,7 +565,7 @@
                         <span id="stat-fps" class="stat-value">0.0</span>
                     </div>
                     <div class="stat-item">
-                        <span class="stat-label">Stream Pipeline</span>
+                        <span class="stat-label">C Daemon Status</span>
                         <span id="stat-status" class="stat-value" style="color: var(--accent-red);">Offline</span>
                     </div>
                     <div class="stat-item">
@@ -580,7 +580,7 @@
 
                 <div class="alert alert-info">
                     <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" style="flex-shrink: 0;"><path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm.93-9.412-1 4.705c-.07.34.029.533.304.533.194 0 .487-.07.686-.246l-.088.416c-.287.346-.92.598-1.465.598-.703 0-1.002-.422-.808-1.319l.738-3.468c.064-.293.006-.399-.287-.47l-.451-.081.082-.381 2.29-.287zM8 5.5a1 1 0 1 1 0-2 1 1 0 0 1 0 2z"/></svg>
-                    <span>H.264 stream decoded in real time. Colors extracted using canvas. Left/Right eyes centered in individual lenses.</span>
+                    <span>C daemon extracts edge colors natively. falling back to client-side JS canvas if C daemon is offline.</span>
                 </div>
             </div>
         </div>
@@ -680,7 +680,7 @@
             document.body.removeChild(contourPath);
         }
 
-        // Color Extraction: Extract average border color zones from hidden canvas
+        // Fallback Client-side Color Extraction: Extract average border color zones from hidden canvas
         function extractEdgeColors(ctx, width, height) {
             const sampleWidth = 8;
             const sampleHeight = 8;
@@ -791,6 +791,53 @@
             barLeft.style.backgroundColor = `rgb(${extracted.left.r}, ${extracted.left.g}, ${extracted.left.b})`;
         }
 
+        // Apply Daemon Extracted Colors
+        function applyDaemonColors(leds) {
+            if (!leds || leds.length < NUM_LEDS) return;
+            
+            let totalR = 0, totalG = 0, totalB = 0;
+
+            leds.forEach((c, idx) => {
+                const node = document.getElementById(`led-node-${idx}`);
+                const shadow = document.getElementById(`led-shadow-${idx}`);
+                const rgbStr = `rgb(${c.r}, ${c.g}, ${c.b})`;
+                
+                if (node) {
+                    node.setAttribute('fill', rgbStr);
+                    const shadowRadius = Math.round(15 * ledBrightness);
+                    node.style.filter = `drop-shadow(0 0 ${shadowRadius}px rgba(${c.r}, ${c.g}, ${c.b}, ${ledBrightness}))`;
+                }
+
+                if (shadow) {
+                    shadow.setAttribute('fill', rgbStr);
+                    shadow.setAttribute('opacity', ledBrightness * 0.85);
+                }
+
+                totalR += c.r;
+                totalG += c.g;
+                totalB += c.b;
+            });
+
+            const count = leds.length;
+            const avgR = Math.round(totalR / count);
+            const avgG = Math.round(totalG / count);
+            const avgB = Math.round(totalB / count);
+
+            dynamicGlow.style.background = `radial-gradient(circle, rgba(${avgR},${avgG},${avgB},0.8) 0%, rgba(${avgR},${avgG},${avgB},0) 70%)`;
+            dynamicGlow.style.opacity = ledBrightness * 0.45;
+
+            // Extract samples to drive color bars
+            const topAvg = leds[5] || {r:50,g:50,b:50};
+            const rightAvg = leds[11] || {r:50,g:50,b:50};
+            const bottomAvg = leds[17] || {r:50,g:50,b:50};
+            const leftAvg = leds[23] || {r:50,g:50,b:50};
+
+            barTop.style.backgroundColor = `rgb(${topAvg.r}, ${topAvg.g}, ${topAvg.b})`;
+            barRight.style.backgroundColor = `rgb(${rightAvg.r}, ${rightAvg.g}, ${rightAvg.b})`;
+            barBottom.style.backgroundColor = `rgb(${bottomAvg.r}, ${bottomAvg.g}, ${bottomAvg.b})`;
+            barLeft.style.backgroundColor = `rgb(${leftAvg.r}, ${leftAvg.g}, ${leftAvg.b})`;
+        }
+
         // High-Speed Frame Polling Loop (continuous onload chaining)
         function startFrameStream() {
             if (frameStreamActive) return;
@@ -822,10 +869,8 @@
             // Bypass cache to fetch latest frame
             img.src = `/api/frame?t=${now}`;
             
-            img.onload = function() {
+            img.onload = async function() {
                 lastFrameTime = Date.now();
-                const ctx = hiddenCanvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, 128, 72);
                 
                 const dCtx = displayCanvas.getContext('2d');
                 dCtx.clearRect(0, 0, 128, 72);
@@ -837,9 +882,18 @@
                 lensLeftImg.setAttribute('href', img.src);
                 lensRightImg.setAttribute('href', img.src);
 
-                // Run Ambilight logic
-                const extracted = extractEdgeColors(ctx, 128, 72);
-                applyAmbilightColors(extracted);
+                // Run Ambilight logic: Attempt C daemon fetch first, fallback to client JS canvas
+                try {
+                    const colorsRes = await fetch(`/api/colors?t=${lastFrameTime}`);
+                    if (!colorsRes.ok) throw new Error("Colors API not ready");
+                    const colorsData = await colorsRes.json();
+                    applyDaemonColors(colorsData.leds);
+                } catch (err) {
+                    const ctx = hiddenCanvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, 128, 72);
+                    const extracted = extractEdgeColors(ctx, 128, 72);
+                    applyAmbilightColors(extracted);
+                }
 
                 // Calculate local FPS
                 frameCount++;
@@ -855,12 +909,11 @@
             };
 
             img.onerror = function() {
-                // Cool down and retry if frame isn't ready
                 setTimeout(pollNextFrame, 66);
             };
         }
 
-        // Poll system status at low frequency (1 Hz)
+        // Poll system status at low frequency (1.5 Hz)
         async function checkStatus() {
             try {
                 const res = await fetch('/api/status');
@@ -981,7 +1034,6 @@
         // Initialize App
         window.addEventListener('DOMContentLoaded', () => {
             initLEDs();
-            // Slow, lightweight status checking every 1.5 seconds
             setInterval(checkStatus, 1500);
             checkStatus();
         });

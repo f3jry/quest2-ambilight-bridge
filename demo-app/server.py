@@ -12,11 +12,14 @@ from urllib.parse import urlparse
 PORT = 8080
 WORKSPACE_DIR = "/home/cachy/ambilight"
 ADB_BIN = os.path.join(WORKSPACE_DIR, "platform-tools/adb")
+DAEMON_BIN = os.path.join(WORKSPACE_DIR, "ambilight-daemon/ambilightd")
 FRAME_DIR = "/tmp/ambilight-frames"
 LATEST_FRAME_PATH = os.path.join(FRAME_DIR, "latest.png")
+LATEST_COLORS_PATH = os.path.join(FRAME_DIR, "colors.json")
 LOG_PATH = "/tmp/payload-demo.log"
 
 stream_manager = None
+daemon_process = None
 payload_lock = threading.Lock()
 
 def get_adb_device():
@@ -71,7 +74,6 @@ class StreamManager:
             self.ffmpeg_proc = None
             
     def _run_loop(self):
-        # Clean old latest frame to prevent stale display
         if os.path.exists(self.latest_frame_path):
             try:
                 os.remove(self.latest_frame_path)
@@ -79,14 +81,12 @@ class StreamManager:
                 pass
 
         while self.running:
-            # Wake device before starting screenrecord
             try:
                 subprocess.run([self.adb_bin, "-s", self.device, "shell", "input", "keyevent", "KEYCODE_WAKEUP"], 
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except:
                 pass
 
-            # Lower resolution and lower bitrate = fast decoding, low latency and CPU load
             adb_cmd = [
                 self.adb_bin, "-s", self.device, "exec-out", "screenrecord",
                 "--output-format=h264",
@@ -107,7 +107,6 @@ class StreamManager:
             try:
                 os.makedirs(os.path.dirname(self.latest_frame_path), exist_ok=True)
                 
-                # Launch ADB
                 self.adb_proc = subprocess.Popen(
                     adb_cmd,
                     stdout=subprocess.PIPE,
@@ -115,7 +114,6 @@ class StreamManager:
                     preexec_fn=os.setsid if hasattr(os, 'setsid') else None
                 )
                 
-                # Launch FFMPEG reading from ADB stdout
                 self.ffmpeg_proc = subprocess.Popen(
                     ffmpeg_cmd,
                     stdin=self.adb_proc.stdout,
@@ -124,7 +122,7 @@ class StreamManager:
                     preexec_fn=os.setsid if hasattr(os, 'setsid') else None
                 )
                 
-                self.adb_proc.stdout.close() # Allow adb to receive SIGPIPE if ffmpeg exits
+                self.adb_proc.stdout.close()
                 
                 while self.running:
                     if self.ffmpeg_proc.poll() is not None or self.adb_proc.poll() is not None:
@@ -136,10 +134,10 @@ class StreamManager:
                 
             self._kill_processes()
             if self.running:
-                time.sleep(1) # cool down before restart
+                time.sleep(1)
 
 def start_payload():
-    global stream_manager
+    global stream_manager, daemon_process
     with payload_lock:
         if stream_manager and stream_manager.running:
             return True
@@ -149,19 +147,56 @@ def start_payload():
             print("No ADB device found, cannot start payload", file=sys.stderr)
             return False
         
+        # Ensure target folder exists and is clean
+        os.makedirs(FRAME_DIR, exist_ok=True)
+        for p in [LATEST_FRAME_PATH, LATEST_COLORS_PATH]:
+            if os.path.exists(p):
+                try: os.remove(p)
+                except: pass
+
+        # 1. Start C ambilightd daemon in JSON mode outputting to /tmp/ambilight-frames/colors.json
+        daemon_cmd = [
+            DAEMON_BIN,
+            "-m", "json",
+            "-o", LATEST_COLORS_PATH
+        ]
+        try:
+            daemon_process = subprocess.Popen(
+                daemon_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid if hasattr(os, 'setsid') else None
+            )
+            print(f"Started C ambilightd daemon with PID {daemon_process.pid}")
+        except Exception as e:
+            print(f"Failed to start C daemon: {e}", file=sys.stderr)
+
+        # 2. Start H.264 video stream decoding pipeline
         stream_manager = StreamManager(device, ADB_BIN, LATEST_FRAME_PATH)
         stream_manager.start()
-        print(f"Started H.264 pipeline StreamManager for device {device}")
+        print(f"Started H.264 stream decoding pipeline for device {device}")
         return True
 
 def stop_payload():
-    global stream_manager
+    global stream_manager, daemon_process
     with payload_lock:
-        if not stream_manager:
-            return True
-        stream_manager.stop()
-        stream_manager = None
-        print("Stopped StreamManager")
+        # 1. Stop H.264 stream decoding pipeline
+        if stream_manager:
+            stream_manager.stop()
+            stream_manager = None
+            print("Stopped StreamManager")
+
+        # 2. Stop C daemon process
+        if daemon_process:
+            try:
+                os.killpg(os.getpgid(daemon_process.pid), signal.SIGTERM)
+                daemon_process.wait(timeout=1)
+                print("Stopped C daemon successfully")
+            except Exception as e:
+                print(f"Error stopping C daemon: {e}", file=sys.stderr)
+                try: daemon_process.kill()
+                except: pass
+            daemon_process = None
         return True
 
 class DemoAppHandler(http.server.SimpleHTTPRequestHandler):
@@ -209,6 +244,19 @@ class DemoAppHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(404)
                 self.end_headers()
                 self.wfile.write(b"Frame not found")
+
+        elif path == "/api/colors":
+            if os.path.exists(LATEST_COLORS_PATH):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                with open(LATEST_COLORS_PATH, "rb") as f:
+                    self.wfile.write(f.read())
+            else:
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"Colors not found")
                 
         elif path == "/api/start":
             success = start_payload()
@@ -267,7 +315,7 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 def main():
     device = get_adb_device()
     if device:
-        print(f"Device {device} detected. Starting pipeline...")
+        print(f"Device {device} detected. Starting daemon & pipeline...")
         start_payload()
     else:
         print("No device detected. Connect device and start in web UI.")

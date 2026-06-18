@@ -5,6 +5,10 @@ adb-build/
 android-tools-src/
 rootfs-inspect/
 
+# Compiled C daemon binaries (build with: make -C ambilight-daemon)
+ambilight-daemon/ambilightd
+ambilight-daemon/ambilightd-riscv64
+
 # Python Cache
 __pycache__/
 *.pyc
