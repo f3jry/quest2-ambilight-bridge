@@ -75,8 +75,15 @@ cleanup() {
     log "Stopping C ambilightd daemon (PID $DAEMON_PID)..."
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
+  log "Restoring proximity sensor and stayon settings..."
+  "$ADB" -s "$TARGET" shell am broadcast -a com.oculus.vrpowermanager.automation_disable >/dev/null 2>&1 || true
+  "$ADB" -s "$TARGET" shell svc power stayon false >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
+
+log "Overriding proximity sensor and setting stayon=usb..."
+"$ADB" -s "$TARGET" shell am broadcast -a com.oculus.vrpowermanager.prox_close >/dev/null 2>&1 || true
+"$ADB" -s "$TARGET" shell svc power stayon usb >/dev/null 2>&1 || true
 
 # Start C ambilightd daemon in SPI mode if installed
 if [ -x /usr/local/bin/ambilightd ]; then
