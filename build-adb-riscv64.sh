@@ -24,7 +24,13 @@ if [[ ! -d "$SRC/lib/boringssl/.git" ]]; then
 fi
 
 echo "[1/3] boringssl (riscv64)"
-make -C "$SRC/lib/boringssl" clean >/dev/null 2>&1 || true
+find "$SRC" -name "*.o" -delete 2>/dev/null || true
+find "$SRC" -name "*.a" -delete 2>/dev/null || true
+find "$SRC" -name "*.so*" -delete 2>/dev/null || true
+if [ -d "$SRC/.git" ]; then git -C "$SRC" clean -fdx 2>/dev/null || true; fi
+if [ -d "$SRC/lib/boringssl/.git" ]; then git -C "$SRC/lib/boringssl" clean -fdx 2>/dev/null || true; fi
+make -C "$SRC/lib/boringssl" -f debian/libcrypto.mk clean >/dev/null 2>&1 || true
+make -C "$SRC/lib/boringssl" -f debian/libssl.mk clean >/dev/null 2>&1 || true
 make -C "$SRC/lib/boringssl" \
   CFLAGS=-fPIC CC=riscv64-linux-gnu-gcc DEB_HOST_ARCH=riscv64 -f debian/libcrypto.mk
 make -C "$SRC/lib/boringssl" \
